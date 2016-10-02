@@ -20,6 +20,7 @@ package org.apache.spark.scheduler
 import java.util.Properties
 
 import org.apache.spark.{LocalSparkContext, SparkConf, SparkContext, SparkFunSuite}
+import org.apache.spark.scheduler.SchedulingMode.SchedulingMode
 
 /**
  * Tests that pools and the associated scheduling algorithms for FIFO and fair scheduling work
@@ -45,7 +46,7 @@ class PoolSuite extends SparkFunSuite with LocalSparkContext {
   }
 
   test("FIFO Scheduler Test") {
-    sc = new SparkContext("local", "TaskSchedulerImplSuite")
+    sc = new SparkContext("local", "PoolSuite")
     val taskScheduler = new TaskSchedulerImpl(sc)
 
     val rootPool = new Pool("", SchedulingMode.FIFO, 0, 0)
@@ -73,9 +74,7 @@ class PoolSuite extends SparkFunSuite with LocalSparkContext {
    * algorithm properly orders the two scheduling pools.
    */
   test("Fair Scheduler Test") {
-    val xmlPath = getClass.getClassLoader.getResource("fairscheduler.xml").getFile()
-    val conf = new SparkConf().set("spark.scheduler.allocation.file", xmlPath)
-    sc = new SparkContext("local", "TaskSchedulerImplSuite", conf)
+    sc = createSparkContext("fairscheduler.xml")
     val taskScheduler = new TaskSchedulerImpl(sc)
 
     val rootPool = new Pool("", SchedulingMode.FAIR, 0, 0)
@@ -83,16 +82,10 @@ class PoolSuite extends SparkFunSuite with LocalSparkContext {
     schedulableBuilder.buildPools()
 
     // Ensure that the XML file was read in correctly.
-    assert(rootPool.getSchedulableByName("default") != null)
-    assert(rootPool.getSchedulableByName("1") != null)
-    assert(rootPool.getSchedulableByName("2") != null)
-    assert(rootPool.getSchedulableByName("3") != null)
-    assert(rootPool.getSchedulableByName("1").minShare === 2)
-    assert(rootPool.getSchedulableByName("1").weight === 1)
-    assert(rootPool.getSchedulableByName("2").minShare === 3)
-    assert(rootPool.getSchedulableByName("2").weight === 1)
-    assert(rootPool.getSchedulableByName("3").minShare === 0)
-    assert(rootPool.getSchedulableByName("3").weight === 1)
+    verifyPool(rootPool, "default", 0, 1, SchedulingMode.FIFO)
+    verifyPool(rootPool, "1", 2, 1, SchedulingMode.FIFO)
+    verifyPool(rootPool, "2", 3, 1, SchedulingMode.FIFO)
+    verifyPool(rootPool, "3", 0, 1, SchedulingMode.FIFO)
 
     val properties1 = new Properties()
     properties1.setProperty("spark.scheduler.pool", "1")
@@ -177,5 +170,34 @@ class PoolSuite extends SparkFunSuite with LocalSparkContext {
     scheduleTaskAndVerifyId(1, rootPool, 4)
     scheduleTaskAndVerifyId(2, rootPool, 6)
     scheduleTaskAndVerifyId(3, rootPool, 2)
+  }
+
+  test("Fair Scheduler should not create duplicate pool") {
+    sc = createSparkContext("fairscheduler-duplicate-pools.xml")
+
+    val rootPool = new Pool("", SchedulingMode.FAIR, 0, 0)
+    val schedulableBuilder = new FairSchedulableBuilder(rootPool, sc.conf)
+    schedulableBuilder.buildPools()
+
+    assert(rootPool.schedulableQueue.size == 2)
+    assert(rootPool.schedulableNameToSchedulable.size == 2)
+
+    verifyPool(rootPool, "default", 0, 1, SchedulingMode.FIFO)
+    verifyPool(rootPool, "duplicate_pool1", 1, 1, SchedulingMode.FAIR)
+  }
+
+  private def createSparkContext(fileName: String): SparkContext = {
+    val xmlPath = getClass.getClassLoader.getResource(fileName).getFile()
+    val conf = new SparkConf().set("spark.scheduler.allocation.file", xmlPath)
+    new SparkContext("local", "PoolSuite", conf)
+  }
+
+  private def verifyPool(rootPool: Pool, poolName: String, expectedInitMinShare: Int,
+                         expectedInitWeight: Int, expectedSchedulingMode: SchedulingMode): Unit = {
+    val pool = rootPool.getSchedulableByName(poolName)
+    assert(pool != null)
+    assert(pool.minShare === expectedInitMinShare)
+    assert(pool.weight === expectedInitWeight)
+    assert(pool.schedulingMode === expectedSchedulingMode)
   }
 }
