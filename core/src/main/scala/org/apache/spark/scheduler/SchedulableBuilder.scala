@@ -102,41 +102,35 @@ private[spark] class FairSchedulableBuilder(val rootPool: Pool, conf: SparkConf)
     for (poolNode <- (xml \\ POOLS_PROPERTY)) {
 
       val poolName = (poolNode \ POOL_NAME_PROPERTY).text
+      var schedulingMode = DEFAULT_SCHEDULING_MODE
+      var minShare = DEFAULT_MINIMUM_SHARE
+      var weight = DEFAULT_WEIGHT
 
-      if(rootPool.getSchedulableByName(poolName) == null) {
-        var schedulingMode = DEFAULT_SCHEDULING_MODE
-        var minShare = DEFAULT_MINIMUM_SHARE
-        var weight = DEFAULT_WEIGHT
-
-        val xmlSchedulingMode = (poolNode \ SCHEDULING_MODE_PROPERTY).text
-        if (xmlSchedulingMode != "") {
-          try {
-            schedulingMode = SchedulingMode.withName(xmlSchedulingMode)
-          } catch {
-            case e: NoSuchElementException =>
-              logWarning(s"Unsupported schedulingMode: $xmlSchedulingMode, " +
-                s"using the default schedulingMode: $schedulingMode")
-          }
+      val xmlSchedulingMode = (poolNode \ SCHEDULING_MODE_PROPERTY).text
+      if (xmlSchedulingMode != "") {
+        try {
+          schedulingMode = SchedulingMode.withName(xmlSchedulingMode)
+        } catch {
+          case e: NoSuchElementException =>
+            logWarning(s"Unsupported schedulingMode: $xmlSchedulingMode, " +
+              s"using the default schedulingMode: $schedulingMode")
         }
-
-        val xmlMinShare = (poolNode \ MINIMUM_SHARES_PROPERTY).text
-        if (xmlMinShare != "") {
-          minShare = xmlMinShare.toInt
-        }
-
-        val xmlWeight = (poolNode \ WEIGHT_PROPERTY).text
-        if (xmlWeight != "") {
-          weight = xmlWeight.toInt
-        }
-
-        val pool = new Pool(poolName, schedulingMode, minShare, weight)
-        rootPool.addSchedulable(pool)
-        logInfo("Created pool %s, schedulingMode: %s, minShare: %d, weight: %d".format(
-          poolName, schedulingMode, minShare, weight))
-      } else {
-        logWarning(s"Pool: $poolName already exists so duplicate is not created.")
       }
 
+      val xmlMinShare = (poolNode \ MINIMUM_SHARES_PROPERTY).text
+      if (xmlMinShare != "") {
+        minShare = xmlMinShare.toInt
+      }
+
+      val xmlWeight = (poolNode \ WEIGHT_PROPERTY).text
+      if (xmlWeight != "") {
+        weight = xmlWeight.toInt
+      }
+
+      val pool = new Pool(poolName, schedulingMode, minShare, weight)
+      rootPool.addSchedulable(pool)
+      logInfo("Created pool %s, schedulingMode: %s, minShare: %d, weight: %d".format(
+        poolName, schedulingMode, minShare, weight))
     }
   }
 

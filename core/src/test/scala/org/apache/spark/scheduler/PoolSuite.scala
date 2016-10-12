@@ -28,6 +28,9 @@ import org.apache.spark.scheduler.SchedulingMode.SchedulingMode
  */
 class PoolSuite extends SparkFunSuite with LocalSparkContext {
 
+  val LOCAL = "local"
+  val POOL_SUITE = "PoolSuite"
+
   def createTaskSetManager(stageId: Int, numTasks: Int, taskScheduler: TaskSchedulerImpl)
     : TaskSetManager = {
     val tasks = Array.tabulate[Task[_]](numTasks) { i =>
@@ -46,12 +49,11 @@ class PoolSuite extends SparkFunSuite with LocalSparkContext {
   }
 
   test("FIFO Scheduler Test") {
-    sc = new SparkContext("local", "PoolSuite")
+    sc = new SparkContext(LOCAL, POOL_SUITE)
     val taskScheduler = new TaskSchedulerImpl(sc)
 
     val rootPool = new Pool("", SchedulingMode.FIFO, 0, 0)
     val schedulableBuilder = new FIFOSchedulableBuilder(rootPool)
-    schedulableBuilder.buildPools()
 
     val taskSetManager0 = createTaskSetManager(0, 2, taskScheduler)
     val taskSetManager1 = createTaskSetManager(1, 2, taskScheduler)
@@ -82,15 +84,15 @@ class PoolSuite extends SparkFunSuite with LocalSparkContext {
     schedulableBuilder.buildPools()
 
     // Ensure that the XML file was read in correctly.
-    verifyPool(rootPool, "default", 0, 1, SchedulingMode.FIFO)
+    verifyPool(rootPool, schedulableBuilder.DEFAULT_POOL_NAME, 0, 1, SchedulingMode.FIFO)
     verifyPool(rootPool, "1", 2, 1, SchedulingMode.FIFO)
     verifyPool(rootPool, "2", 3, 1, SchedulingMode.FIFO)
     verifyPool(rootPool, "3", 0, 1, SchedulingMode.FIFO)
 
     val properties1 = new Properties()
-    properties1.setProperty("spark.scheduler.pool", "1")
+    properties1.setProperty(schedulableBuilder.FAIR_SCHEDULER_PROPERTIES, "1")
     val properties2 = new Properties()
-    properties2.setProperty("spark.scheduler.pool", "2")
+    properties2.setProperty(schedulableBuilder.FAIR_SCHEDULER_PROPERTIES, "2")
 
     val taskSetManager10 = createTaskSetManager(0, 1, taskScheduler)
     val taskSetManager11 = createTaskSetManager(1, 1, taskScheduler)
@@ -127,7 +129,7 @@ class PoolSuite extends SparkFunSuite with LocalSparkContext {
   }
 
   test("Nested Pool Test") {
-    sc = new SparkContext("local", "TaskSchedulerImplSuite")
+    sc = new SparkContext(LOCAL, POOL_SUITE)
     val taskScheduler = new TaskSchedulerImpl(sc)
 
     val rootPool = new Pool("", SchedulingMode.FAIR, 0, 0)
@@ -172,6 +174,26 @@ class PoolSuite extends SparkFunSuite with LocalSparkContext {
     scheduleTaskAndVerifyId(3, rootPool, 2)
   }
 
+  test("FIFO Scheduler should not add duplicate TaskSetManager") {
+    sc = new SparkContext(LOCAL, POOL_SUITE)
+    val taskScheduler = new TaskSchedulerImpl(sc)
+
+    val rootPool = new Pool("", SchedulingMode.FIFO, 0, 0)
+    val schedulableBuilder = new FIFOSchedulableBuilder(rootPool)
+
+    val taskSetManager0 = createTaskSetManager(0, 2, taskScheduler)
+    val taskSetManager1 = createTaskSetManager(1, 2, taskScheduler)
+    schedulableBuilder.addTaskSetManager(taskSetManager0, null)
+    schedulableBuilder.addTaskSetManager(taskSetManager0, null)
+    schedulableBuilder.addTaskSetManager(taskSetManager1, null)
+
+    assert(rootPool.schedulableQueue.size == 2)
+    assert(rootPool.schedulableNameToSchedulable.size == 2)
+
+    assert(rootPool.getSchedulableByName(taskSetManager0.name) == taskSetManager0)
+    assert(rootPool.getSchedulableByName(taskSetManager1.name) == taskSetManager1)
+  }
+
   test("Fair Scheduler should not create duplicate pool") {
     sc = createSparkContext("fairscheduler-duplicate-pools.xml")
 
@@ -182,14 +204,67 @@ class PoolSuite extends SparkFunSuite with LocalSparkContext {
     assert(rootPool.schedulableQueue.size == 2)
     assert(rootPool.schedulableNameToSchedulable.size == 2)
 
-    verifyPool(rootPool, "default", 0, 1, SchedulingMode.FIFO)
-    verifyPool(rootPool, "duplicate_pool1", 1, 1, SchedulingMode.FAIR)
+    verifyPool(rootPool, schedulableBuilder.DEFAULT_POOL_NAME, 0, 1, SchedulingMode.FIFO)
+    verifyPool(rootPool, "duplicate_pool1", 2, 2, SchedulingMode.FAIR)
+  }
+
+  test("Fair Scheduler should not add duplicate TaskSetManager via default pool") {
+    sc = new SparkContext(LOCAL, POOL_SUITE)
+    val taskScheduler = new TaskSchedulerImpl(sc)
+
+    val rootPool = new Pool("", SchedulingMode.FAIR, 0, 0)
+    val schedulableBuilder = new FairSchedulableBuilder(rootPool, sc.conf)
+    schedulableBuilder.buildPools()
+
+    val taskSetManager0 = createTaskSetManager(0, 2, taskScheduler)
+    val taskSetManager1 = createTaskSetManager(1, 2, taskScheduler)
+    schedulableBuilder.addTaskSetManager(taskSetManager0, null)
+    schedulableBuilder.addTaskSetManager(taskSetManager0, null)
+    schedulableBuilder.addTaskSetManager(taskSetManager1, null)
+
+    rootPool.getSchedulableByName(schedulableBuilder.DEFAULT_POOL_NAME) match {
+      case defaultPool: Pool =>
+        assert(defaultPool.schedulableQueue.size == 2)
+        assert(defaultPool.schedulableNameToSchedulable.size == 2)
+        assert(defaultPool.getSchedulableByName(taskSetManager0.name) == taskSetManager0)
+        assert(defaultPool.getSchedulableByName(taskSetManager1.name) == taskSetManager1)
+
+      case _ => fail("Default Pool can not be found for Fair Scheduler")
+    }
+  }
+
+  test("Fair Scheduler should not add duplicate TaskSetManager via custom pool") {
+    val CUSTOM_POOL = "customPool"
+    sc = new SparkContext(LOCAL, POOL_SUITE)
+    val taskScheduler = new TaskSchedulerImpl(sc)
+
+    val rootPool = new Pool("", SchedulingMode.FAIR, 0, 0)
+    val schedulableBuilder = new FairSchedulableBuilder(rootPool, sc.conf)
+    schedulableBuilder.buildPools()
+
+    val properties = new Properties()
+    properties.setProperty(schedulableBuilder.FAIR_SCHEDULER_PROPERTIES, CUSTOM_POOL)
+    val taskSetManager0 = createTaskSetManager(0, 2, taskScheduler)
+    val taskSetManager1 = createTaskSetManager(1, 2, taskScheduler)
+    schedulableBuilder.addTaskSetManager(taskSetManager0, properties)
+    schedulableBuilder.addTaskSetManager(taskSetManager0, properties)
+    schedulableBuilder.addTaskSetManager(taskSetManager1, properties)
+
+    rootPool.getSchedulableByName(CUSTOM_POOL) match {
+      case customPool: Pool =>
+        assert(customPool.schedulableQueue.size == 2)
+        assert(customPool.schedulableNameToSchedulable.size == 2)
+        assert(customPool.getSchedulableByName(taskSetManager0.name) == taskSetManager0)
+        assert(customPool.getSchedulableByName(taskSetManager1.name) == taskSetManager1)
+
+      case _ => fail(s"$CUSTOM_POOL Pool can not be found for Fair Scheduler")
+    }
   }
 
   private def createSparkContext(fileName: String): SparkContext = {
     val xmlPath = getClass.getClassLoader.getResource(fileName).getFile()
     val conf = new SparkConf().set("spark.scheduler.allocation.file", xmlPath)
-    new SparkContext("local", "PoolSuite", conf)
+    new SparkContext(LOCAL, POOL_SUITE, conf)
   }
 
   private def verifyPool(rootPool: Pool, poolName: String, expectedInitMinShare: Int,

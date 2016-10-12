@@ -195,8 +195,8 @@ class TaskSchedulerImplSuite extends SparkFunSuite with LocalSparkContext with B
     // Now check that we can still submit tasks
     // Even if one of the task sets has not-serializable tasks, the other task set should
     // still be processed without error
-    taskScheduler.submitTasks(FakeTask.createTaskSet(1))
     taskScheduler.submitTasks(taskSet)
+    taskScheduler.submitTasks(FakeTask.createTaskSet(1))
     taskDescriptions = taskScheduler.resourceOffers(multiCoreWorkerOffers).flatten
     assert(taskDescriptions.map(_.executorId) === Seq("executor0"))
   }
